@@ -1,39 +1,43 @@
-​​// المرحلة 1
+'use strict';
+// المرحلة 1
 
 const ICON_SUN  = '\u2600\uFE0F';
 const ICON_MOON = '\uD83C\uDF19';
 
 class QuizGame {
-
     constructor() {
 
         this.config = {
-            SUPABASE_URL: 'https://ckbphyndplaihlfdypyi.supabase.co',
-            SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrYnBoeW5kcGxhaWhsZmR5cHlpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA1MjI3MjQsImV4cCI6MjA3NjA5ODcyNH0.waA1ZU5pU3n-d7VHn18MQ8J7qVPT9mz1udKUeEjcydI',
-            EDGE_SAVE_URL: 'https://ckbphyndplaihlfdypyi.supabase.co/functions/v1/saveResult',
-            EDGE_LOG_URL: 'https://ckbphyndplaihlfdypyi.supabase.co/functions/v1/clientLog',
-            EDGE_REPORT_URL: 'https://ckbphyndplaihlfdypyi.supabase.co/functions/v1/report',
-            EDGE_LEADERBOARD_URL: 'https://ckbphyndplaihlfdypyi.supabase.co/functions/v1/leaderboard',
-            APP_KEY: 'MS_AbuQusay',
-            QUESTIONS_URL: './questions.json',
+          SUPABASE_URL: 'https://caixyxzokfvsouuwucwc.supabase.co',
+          // استخدم الـ anon public للمستخدم (وليس service role)
+          SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhaXh5eHpva2Z2c291dXd1Y3djIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMTkzMTAsImV4cCI6MjA3Njg5NTMxMH0.OTeqKh7z6B2EQoz4NnhwcqfBQC_NfNVw0MxhBecRyAc',
 
-            QUESTION_TIME: 80,
-            MAX_WRONG_ANSWERS: Infinity,
-            STARTING_SCORE: 100,
+          // Functions على نفس مشروع Supabase الجديد
+          EDGE_SAVE_URL:       'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/saveResult',
+          EDGE_LOG_URL:        'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/clientLog',
+          EDGE_REPORT_URL:     'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/report',
+          EDGE_LEADERBOARD_URL:'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/leaderboard',
 
-            LEVELS: [
-                { name: 'easy',       label: 'سهل' },
-                { name: 'medium',     label: 'متوسط' },
-                { name: 'hard',       label: 'صعب' },
-                { name: 'impossible', label: 'مستحيل' }
-            ],
+          APP_KEY: 'MS_AbuQusay_2025',
 
-            HELPER_COSTS: { fiftyFifty: 100, freezeTime: 100, skipQuestionBase: 0, skipQuestionIncrement: 0 },
-            SKIP_WEIGHT: 0.7,
+          // اختَر ما يناسبك: ملف محلي أو الرابط العام السابق
+          QUESTIONS_URL: './questions.json',
 
-            CLICK_DEBOUNCE_MS: 600,
-            COOLDOWN_SECONDS: 30,
-            REQ_TIMEOUT_MS: 10000
+          // بقية الإعدادات (كما اعتمدناها بالدمج)
+          QUESTION_TIME: 80,
+          MAX_WRONG_ANSWERS: Infinity,
+          STARTING_SCORE: 100,
+          LEVELS: [
+            { name: 'easy',       label: 'سهل' },
+            { name: 'medium',     label: 'متوسط' },
+            { name: 'hard',       label: 'صعب' },
+            { name: 'impossible', label: 'مستحيل' }
+          ],
+          HELPER_COSTS: { fiftyFifty: 100, freezeTime: 100, skipQuestionBase: 0, skipQuestionIncrement: 0 },
+          SKIP_WEIGHT: 0.7,
+          CLICK_DEBOUNCE_MS: 600,
+          COOLDOWN_SECONDS: 30,
+          REQ_TIMEOUT_MS: 10000
         };
 
         this.questions = {};
@@ -663,7 +667,6 @@ class QuizGame {
 }
 
 // المرحلة 2
-
 Object.assign(QuizGame.prototype, {
 
     postInstructionsStart: async function () {
@@ -1705,10 +1708,7 @@ Object.assign(QuizGame.prototype, {
    } 
 });
 
-​    
-    
 // المرحلة 3    
-    
 Object.assign(QuizGame.prototype, {    
     
     _tx: {    
