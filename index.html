@@ -307,5 +307,14 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js" defer></script>
 
   <script src="script.js?v=19" defer></script>
+
+  <!-- Multi-FAB: Help + Report -->
+  <div class="multi-fab" id="multiFab" dir="rtl" aria-label="قائمة إجراءات">
+     <button type="button" class="fab main" id="multiFabMain" aria-haspopup="true" aria-expanded="false" title="مساعدة وإبلاغ">🤖</button>
+     <div class="fab-menu" id="multiFabMenu" role="menu" aria-hidden="true">
+          <button type="button" class="fab item" data-action="open-help" role="menuitem" title="إرشادات">❓</button>
+          <button type="button" class="fab item" data-action="open-report" role="menuitem" title="إبلاغ عن مشكلة">⚠️</button>
+      </div>
+  </div>
 </body>
 </html>
