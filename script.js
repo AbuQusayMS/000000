@@ -1,307 +1,864 @@
-'use strict';
-// المرحلة 1
+(() => {
+    'use strict';
 
-const ICON_SUN  = '\u2600\uFE0F';
-const ICON_MOON = '\uD83C\uDF19';
+    /* ===========================
+       Phase 1 — Core constants + theme icon helper
+       =========================== */
 
-class QuizGame {
-    constructor() {
+    /** Read-only icons with safe fallbacks */
+    const ICONS = Object.freeze({
+        SUN: '\u2600\uFE0F',         // ☀️
+        MOON: '\uD83C\uDF19',        // 🌙
+        FALLBACK_SUN: '☀️',
+        FALLBACK_MOON: '🌙'
+    });
 
-        this.config = {
-          SUPABASE_URL: 'https://caixyxzokfvsouuwucwc.supabase.co',
-          // استخدم الـ anon public للمستخدم (وليس service role)
-          SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhaXh5eHpva2Z2c291dXd1Y3djIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMTkzMTAsImV4cCI6MjA3Njg5NTMxMH0.OTeqKh7z6B2EQoz4NnhwcqfBQC_NfNVw0MxhBecRyAc',
-
-          // Functions على نفس مشروع Supabase الجديد
-          EDGE_SAVE_URL:       'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/saveResult',
-          EDGE_LOG_URL:        'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/clientLog',
-          EDGE_REPORT_URL:     'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/report',
-          EDGE_LEADERBOARD_URL:'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/leaderboard',
-
-          APP_KEY: 'MS_AbuQusay_2025',
-
-          // اختَر ما يناسبك: ملف محلي أو الرابط العام السابق
-          QUESTIONS_URL: './questions.json',
-
-          // بقية الإعدادات (كما اعتمدناها بالدمج)
-          QUESTION_TIME: 80,
-          MAX_WRONG_ANSWERS: Infinity,
-          STARTING_SCORE: 100,
-          LEVELS: [
-            { name: 'easy',       label: 'سهل' },
-            { name: 'medium',     label: 'متوسط' },
-            { name: 'hard',       label: 'صعب' },
-            { name: 'impossible', label: 'مستحيل' }
-          ],
-          HELPER_COSTS: { fiftyFifty: 100, freezeTime: 100, skipQuestionBase: 0, skipQuestionIncrement: 0 },
-          SKIP_WEIGHT: 0.7,
-          CLICK_DEBOUNCE_MS: 600,
-          COOLDOWN_SECONDS: 30,
-          REQ_TIMEOUT_MS: 10000
-        };
-
-        this.questions = {};
-        this.gameState = {};
-        this.timer = { interval: null, isFrozen: false, total: 0 };
-        this.dom = {};
-        this.cropper = null;
-        this.leaderboardSubscription = null;
-        this.recentErrors = [];
-        this.audioCache = new Map();
-        this.currentSessionId = this.generateSessionId();
-        this.cleanupQueue = [];
-        this.answerSubmitted = false;
-        this.pendingRequests = new Set();
-        this.lbFirstOpenDone = false;
-        this.idempotency = new Set();
-        this.lastActionAt = new Map();
-
-        this.performanceMetrics = {
-            startTime: 0,
-            questionsAnswered: 0,
-            totalTimeSpent: 0
-        };
-        this.imageCache = new Map();
-        this.leaderboardCache = new Map();
-        this._lbTicker = null;
-        this.retryQueue = [];
-
-        this.setupErrorHandling();
-        this.setupBackButtonHandler();
-        this.init();
+    /** Safe getter for current theme from <body data-theme>, defaults to 'dark' */
+    function getTheme() {
+        const el = document.body;
+        const t = (el?.dataset?.theme || localStorage.getItem('theme') || 'dark').toLowerCase();
+        return (t === 'light') ? 'light' : 'dark';
     }
 
-    cacheDomElements() {
-        const byId = (id) => document.getElementById(id);
-        this.dom = {
-            screens: {
-                loader:        byId('loader'),
-                start:         byId('startScreen'),
-                avatar:        byId('avatarScreen'),
-                nameEntry:     byId('nameEntryScreen'),
-                instructions:  byId('instructionsScreen'),
-                game:          byId('gameContainer'),
-                levelComplete: byId('levelCompleteScreen'),
-                end:           byId('endScreen'),
-                leaderboard:   byId('leaderboardScreen')
-            },
-            modals: {
-                confirmExit:    byId('confirmExitModal'),
-                advancedReport: byId('advancedReportModal'),
-                avatarEditor:   byId('avatarEditorModal'),
-                playerDetails:  byId('playerDetailsModal')
-            },
-            nameInput:             byId('nameInput'),
-            nameError:             byId('nameError'),
-            confirmNameBtn:        byId('confirmNameBtn'),
-            confirmAvatarBtn:      byId('confirmAvatarBtn'),
-            reportProblemForm:     byId('reportProblemForm'),
-            imageToCrop:           byId('image-to-crop'),
-            leaderboardContent:    byId('leaderboardContent'),
-            questionText:          byId('questionText'),
-            optionsGrid:           this.getEl('.options-grid'),
-            scoreDisplay:          byId('currentScore'),
-            reportFab:             byId('reportErrorFab'),
-            problemScreenshot:     byId('problemScreenshot'),
-            reportImagePreview:    byId('reportImagePreview'),
-            includeAutoDiagnostics:byId('includeAutoDiagnostics'),
-            lbMode:                byId('lbMode'),
-            lbAttempt:             byId('lbAttempt'),
-            retryHint:             byId('retryHint'),
-            retryCountdown:        byId('retryCountdown'),
-            startBtn:              byId('startBtn')
-        };
-    }
-
-    _diagnoseMissingCoreEls() {
-        const requiredIds = [
-            'nameInput','confirmNameBtn','gameContainer','startScreen','avatarScreen',
-            'nameEntryScreen','instructionsScreen','endScreen','leaderboardScreen',
-            'questionText','currentScore'
-        ];
-        const missing = requiredIds.filter(id => !document.getElementById(id));
-        if (missing.length) {
-            console.warn('[تشخيص] عناصر أساسية مفقودة في DOM:', missing);
-            console.warn('تأكد أن IDs المذكورة موجودة في index.html قبل إنشاء الكائن new QuizGame().');
+    /** Persist + reflect theme on DOM */
+    function setTheme(theme) {
+        const t = (String(theme).toLowerCase() === 'light') ? 'light' : 'dark';
+        document.body.dataset.theme = t;
+        try { localStorage.setItem('theme', t); } catch {}
+        // update toggler icon if present
+        const btn = document.querySelector('.theme-toggle-btn');
+        if (btn) {
+            btn.textContent = (t === 'dark') ? (ICONS.SUN || ICONS.FALLBACK_SUN)
+                                             : (ICONS.MOON || ICONS.FALLBACK_MOON);
+            btn.setAttribute('aria-label', t === 'dark' ? 'التبديل إلى الوضع الفاتح' : 'التبديل إلى الوضع الداكن');
         }
     }
 
-    getEl(selector, parent = document) { 
-        return parent.querySelector(selector); 
-    }
-    
-    getAllEl(selector, parent = document) { 
-        return Array.from(parent.querySelectorAll(selector)); 
+    /** Initialize theme and icon once on DOM ready (idempotent) */
+    function initThemeOnce() {
+        const current = getTheme();
+        setTheme(current);
     }
 
-    safeOn(el, ev, fn, opts) {
-        if (el) { el.addEventListener(ev, fn, opts); return true; }
-        console.warn('[bind] عنصر مفقود:', { selectorOrId: el?.id || el, event: ev });
-        return false;
+    /** Public minimal API (namespaced) */
+    window.UI ??= {};
+    window.UI.theme = Object.freeze({
+        icons: ICONS,
+        get: getTheme,
+        set: setTheme,
+        init: initThemeOnce
+    });
+
+    document.addEventListener('DOMContentLoaded', initThemeOnce);
+
+    })();
+
+constructor() {
+        'use strict';
+
+        // إعدادات ثابتة مع حماية القيم الافتراضية
+        this.config = Object.freeze({
+            SUPABASE_URL: 'https://caixyxzokfvsouuwucwc.supabase.co',
+            SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNhaXh5eHpva2Z2c291dXd1Y3djIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMTkzMTAsImV4cCI6MjA3Njg5NTMxMH0.OTeqKh7z6B2EQoz4NnhwcqfBQC_NfNVw0MxhBecRyAc',
+            EDGE_SAVE_URL:        'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/saveResult',
+            EDGE_LOG_URL:         'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/clientLog',
+            EDGE_REPORT_URL:      'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/report',
+            EDGE_LEADERBOARD_URL: 'https://caixyxzokfvsouuwucwc.supabase.co/functions/v1/leaderboard',
+            APP_KEY: 'MS_AbuQusay_2025',
+            QUESTIONS_URL: './questions.json',
+            QUESTION_TIME: 80,
+            MAX_WRONG_ANSWERS: Infinity,
+            STARTING_SCORE: 100,
+            LEVELS: Object.freeze([
+                { name: 'easy',       label: 'سهل' },
+                { name: 'medium',     label: 'متوسط' },
+                { name: 'hard',       label: 'صعب' },
+                { name: 'impossible', label: 'مستحيل' }
+            ]),
+            HELPER_COSTS: Object.freeze({
+                fiftyFifty: 100,
+                freezeTime: 100,
+                skipQuestionBase: 0,
+                skipQuestionIncrement: 0
+            }),
+            SKIP_WEIGHT: 0.7,
+            CLICK_DEBOUNCE_MS: 600,
+            COOLDOWN_SECONDS: 30,
+            REQ_TIMEOUT_MS: 10000
+        });
+
+        // كائنات الحالة
+        this.questions = Object.create(null);
+        this.gameState = Object.create(null);
+        this.timer = { interval: null, isFrozen: false, total: 0 };
+        this.dom = Object.create(null);
+
+        // ذاكرات مؤقتة
+        this.audioCache = new Map();
+        this.imageCache = new Map();
+        this.leaderboardCache = new Map();
+        this.retryQueue = [];
+        this.pendingRequests = new Set();
+        this.idempotency = new Set();
+        this.lastActionAt = new Map();
+
+        // معرفات وأعلام
+        this.cropper = null;
+        this.leaderboardSubscription = null;
+        this.recentErrors = [];
+        this.answerSubmitted = false;
+        this.lbFirstOpenDone = false;
+        this._lbTicker = null;
+
+        // توليد معرفات قوية
+        this.currentSessionId = this.generateSessionId?.() ?? ('S-' + crypto?.randomUUID?.() ?? Date.now().toString(36));
+        this.deviceId = this.getOrSetDeviceId?.() ?? ('D-' + (crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)).toUpperCase());
+
+        // قياسات الأداء
+        this.performanceMetrics = {
+            startTime: (performance && performance.now) ? performance.now() : Date.now(),
+            questionsAnswered: 0,
+            totalTimeSpent: 0
+        };
+
+        // حجز عمليات التنظيف
+        this.cleanupQueue = [];
+
+        // تهيئة تعتمد على DOM: نضمن الجاهزية قبل الربط
+        const onReady = () => {
+            try {
+                this.cacheDomElements();
+                this.setupErrorHandling?.();
+                this.setupBackButtonHandler?.();
+                this.init?.();
+                console.debug('%c[QuizGame] Ready', 'color:#22c55e;font-weight:700;');
+            } catch (err) {
+                console.error('[QuizGame:init]', err);
+            }
+        };
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', onReady, { once: true, passive: true });
+        } else {
+            queueMicrotask(onReady);
+        }
+    }
+
+cacheDomElements() {
+        'use strict';
+
+        // أدوات مختصرة
+        const $id = (id) => document.getElementById(id);
+        const $q  = (sel) => document.querySelector(sel);
+
+        // ملاحظة: لا نستخدم Object.freeze هنا حتى نسمح بتحديث/إصلاح الإشارات لاحقًا إن لزم
+        this.dom = {
+            screens: {
+                loader:        $id('loader'),
+                start:         $id('startScreen'),
+                avatar:        $id('avatarScreen'),
+                nameEntry:     $id('nameEntryScreen'),
+                // instructions محذوفة من HTML لديك، سنتركه null بدون خطأ
+                instructions:  $id('instructionsScreen'),
+                game:          $id('gameContainer'),
+                levelComplete: $id('levelCompleteScreen'),
+                end:           $id('endScreen'),
+                leaderboard:   $id('leaderboardScreen')
+            },
+            modals: {
+                confirmExit:    $id('confirmExitModal'),
+                advancedReport: $id('advancedReportModal'),
+                avatarEditor:   $id('avatarEditorModal'),
+                playerDetails:  $id('playerDetailsModal')
+            },
+            nameInput:               $id('nameInput'),
+            nameError:               $id('nameError'),
+            confirmNameBtn:          $id('confirmNameBtn'),
+            confirmAvatarBtn:        $id('confirmAvatarBtn'),
+            reportProblemForm:       $id('reportProblemForm'),
+            imageToCrop:             $id('image-to-crop'),
+            leaderboardContent:      $id('leaderboardContent'),
+            questionText:            $id('questionText'),
+            optionsGrid:             $q('.options-grid'),
+            scoreDisplay:            $id('currentScore'),
+            reportFab:               $id('reportErrorFab'),
+            problemScreenshot:       $id('problemScreenshot'),
+            reportImagePreview:      $id('reportImagePreview'),
+            includeAutoDiagnostics:  $id('includeAutoDiagnostics'),
+            lbMode:                  $id('lbMode'),
+            lbAttempt:               $id('lbAttempt'),
+            retryHint:               $id('retryHint'),
+            retryCountdown:          $id('retryCountdown'),
+            startBtn:                $id('startBtn')
+        };
+
+        // تشخيص ذكي: نعرض فقط العناصر الجوهرية المفقودة
+        const coreIds = [
+            'startScreen', 'avatarScreen', 'nameEntryScreen',
+            'gameContainer', 'endScreen', 'leaderboardScreen'
+        ];
+        const missingCore = coreIds.filter((id) => !$id(id));
+        if (missingCore.length) {
+            console.warn('[QuizGame] عناصر أساسية مفقودة في DOM:', missingCore);
+            console.warn('تأكد من وجود هذه الـ IDs في index.html قبل إنشاء new QuizGame().');
+        }
+
+        return this.dom;
+    }
+
+    /* -------------------------------------------------
+       تشخيص العناصر الأساسية + أدوات DOM/Events
+       ------------------------------------------------- */
+
+    _diagnoseMissingCoreEls(requiredIds) {
+        'use strict';
+        const isDev =
+            (this?.config?.DEBUG === true) ||
+            (typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1)/i.test(location.hostname));
+
+        // قائمة افتراضية يمكن تمرير بديل لها عند الاستدعاء
+        const mustHave = Array.isArray(requiredIds) && requiredIds.length
+            ? requiredIds
+            : [
+                'nameInput','confirmNameBtn','gameContainer','startScreen','avatarScreen',
+                'nameEntryScreen','instructionsScreen','endScreen','leaderboardScreen',
+                'questionText','currentScore'
+            ];
+
+        // لا نكرر التحذير إن لم تتغير النتيجة
+        this._lastDiagSig ??= '';
+        const missing = mustHave.filter((id) => !document.getElementById(id));
+        const sig = missing.join('|');
+
+        if (isDev && sig !== this._lastDiagSig) {
+            this._lastDiagSig = sig;
+            if (missing.length) {
+                console.warn('[تشخيص] عناصر أساسية مفقودة في DOM:', missing);
+                console.warn('تأكد أن IDs المذكورة موجودة في index.html قبل إنشاء الكائن new QuizGame().');
+            } else {
+                console.debug('[تشخيص] جميع العناصر الأساسية موجودة ✅');
+            }
+        }
+        return missing;
+    }
+
+    getEl(selector, parent = document) {
+        'use strict';
+        if (!selector || typeof selector !== 'string') {
+            console.warn('[getEl] مُحدد (selector) غير صالح:', selector);
+            return null;
+        }
+        // تخزين مؤقت بسيط لتقليل querySelector المتكرر
+        this._elCache ??= new WeakMap();
+        let map = this._elCache.get(parent);
+        if (!map) {
+            map = new Map();
+            this._elCache.set(parent, map);
+        }
+        if (map.has(selector)) {
+            const cached = map.get(selector);
+            // إن تم إزالة العنصر من DOM، أعد البحث
+            if (cached && cached.isConnected) return cached;
+        }
+        const el = parent.querySelector(selector) || null;
+        map.set(selector, el);
+        return el;
+    }
+
+    getAllEl(selector, parent = document) {
+        'use strict';
+        if (!selector || typeof selector !== 'string') {
+            console.warn('[getAllEl] مُحدد (selector) غير صالح:', selector);
+            return [];
+        }
+        // لا نخزن NodeList مباشرة كي لا يَقدُم (stale) مع تغيّر DOM
+        // لكن نسمح بتخزين آخر نتيجة كمصفوفة يمكن التحقق من اتصالها لاحقًا إن أحببت
+        const nodes = Array.from(parent.querySelectorAll(selector));
+        return nodes;
+    }
+
+    safeOn(elOrSelector, events, handler, opts = {}) {
+        'use strict';
+        // يدعم: عنصر أو مُحدد CSS، حدث مفرد أو مصفوفة/سلسلة مفصولة بمسافات
+        const resolveEl = (x) => {
+            if (!x) return null;
+            if (typeof x === 'string') return this.getEl(x);
+            if (x instanceof Element || x === window || x === document) return x;
+            return null;
+        };
+        const el = resolveEl(elOrSelector);
+        if (!el) {
+            console.warn('[bind] عنصر مفقود:', { selectorOrId: elOrSelector, event: events });
+            return () => {};
+        }
+
+        const list = Array.isArray(events)
+            ? events
+            : String(events || '').trim().split(/\s+/).filter(Boolean);
+
+        if (!list.length) {
+            console.warn('[safeOn] لا توجد أحداث لربطها');
+            return () => {};
+        }
+
+        // خيارات افتراضية ذكية (passive للأحداث الشائعة في اللمس/العجلة)
+        const passiveDefault = /^(touchstart|touchmove|wheel)$/i.test(list[0]);
+        const finalOpts = (opts && typeof opts === 'object')
+            ? { passive: (opts.passive ?? passiveDefault), capture: !!opts.capture, once: !!opts.once, signal: opts.signal }
+            : { passive: passiveDefault };
+
+        // منع التكرار: نحتفظ بسجل ربط لكل عنصر
+        this._listeners ??= new WeakMap();
+        let perEl = this._listeners.get(el);
+        if (!perEl) { perEl = new Map(); this._listeners.set(el, perEl); }
+
+        // نبني مفتاحًا فريدًا لكل (حدث، مُعالج)
+        const unsubs = [];
+        for (const ev of list) {
+            const key = `${ev}::${handler}`;
+            const already = perEl.get(key);
+            if (already) {
+                // موجود مسبقًا—نعيد دالة إلغاء الربط الحالية بدل التكرار
+                unsubs.push(already);
+                continue;
+            }
+            el.addEventListener(ev, handler, finalOpts);
+
+            const off = () => {
+                try { el.removeEventListener(ev, handler, finalOpts); } catch {}
+                perEl.delete(key);
+            };
+            perEl.set(key, off);
+            unsubs.push(off);
+        }
+
+        // دالة موحدة لإلغاء ربط جميع الأحداث التي تمت في هذا الاستدعاء
+        const offAll = () => { for (const fn of unsubs) try { fn(); } catch {} };
+        return offAll;
     }
 
     bindEventListeners() {
-        // ربط نقرات الأزرار العامة عبر data-action (آمن)
-        this.safeOn(document.body, 'click', (e) => {
+        'use strict';
+
+        // تأكيد توفر DOM cache
+        if (!this.dom || !this.dom.nameInput) {
+            if (typeof this.cacheDomElements === 'function') this.cacheDomElements();
+        }
+
+        const on = (el, ev, fn, opts) => this.safeOn(el, ev, fn, opts);
+        const all = (sel, root = document) => this.getAllEl(sel, root);
+        const $  = (sel, root = document) => this.getEl(sel, root);
+
+        // ====== 1) تفويض عام لأزرار data-action ======
+        on(document.body, 'click', (e) => {
             const target = e.target.closest('[data-action]');
             if (!target) return;
-            const action = target.dataset.action;
 
-            const actionHandlers = {
-                showAvatarScreen:      () => this.startFromHomeGuarded(target),
-                showNameEntryScreen:   () => this.showScreen('nameEntry'),
-                confirmName:           () => this.handleNameConfirmation(),
-                postInstructionsStart: () => this.postInstructionsStartGuarded(target),
-                showLeaderboard:       () => this.displayLeaderboard(),
-                showStartScreen:       () => this.showScreen('start'),
-                toggleTheme:           () => this.toggleTheme(),
-                showConfirmExitModal:  () => this.showModal('confirmExit'),
+            const action = target.dataset.action;
+            const guard  = (typeof this.guardAction === 'function') ? this.guardAction(target, action) : true;
+            if (!guard) return;
+
+            // منع النقرات السريعة على نفس الزر
+            const now = Date.now();
+            const k = `click:${action}`;
+            const last = this.lastActionAt?.get?.(k) ?? 0;
+            if (now - last < (this?.config?.CLICK_DEBOUNCE_MS ?? 600)) return;
+            this.lastActionAt?.set?.(k, now);
+
+            // خريطة الإجراءات
+            const act = {
+                showAvatarScreen:      () => this.startFromHomeGuarded?.(target),
+                showNameEntryScreen:   () => this.showScreen?.('nameEntry'),
+                confirmName:           () => this.handleNameConfirmation?.(),
+                postInstructionsStart: () => this.postInstructionsStartGuarded?.(target),
+                showLeaderboard:       () => this.displayLeaderboard?.(),
+                showStartScreen:       () => this.showScreen?.('start'),
+                toggleTheme:           () => (window.UI?.theme?.set(getTheme() === 'dark' ? 'light' : 'dark')),
+                showConfirmExitModal:  () => this.showModal?.('confirmExit'),
                 closeModal:            () => {
                     const id = target.dataset.modalId || target.dataset.modalKey;
-                    if (id === 'avatarEditor' || id === 'avatarEditorModal') this.cleanupAvatarEditor();
-                    this.hideModal(id);
+                    if (id === 'avatarEditor' || id === 'avatarEditorModal') this.cleanupAvatarEditor?.();
+                    this.hideModal?.(id);
                 },
-                endGame:               () => this.endGame(),
-                nextLevel:             () => this.nextLevel(),
-                playAgain:             () => this.playAgainGuarded(target),
-                shareOnX:              () => this.shareOnX(),
-                shareOnInstagram:      () => this.shareOnInstagram(),
-                saveCroppedAvatar:     () => this.saveCroppedAvatar()
+                endGame:               () => this.endGame?.(),
+                nextLevel:             () => this.nextLevel?.(),
+                playAgain:             () => this.playAgainGuarded?.(target),
+                shareOnX:              () => this.shareOnX?.(),
+                shareOnInstagram:      () => this.shareOnInstagram?.(),
+                saveCroppedAvatar:     () => this.saveCroppedAvatar?.()
             };
 
-            if (!this.guardAction(target, action)) return;
-            if (actionHandlers[action]) {
-                this.playSound('click');
-                actionHandlers[action]();
-            }
-        });
+            // صوت بسيط للنقر (اختياري)
+            try { this.playSound?.('click'); } catch {}
 
-        // إدخال الاسم
-        this.safeOn(this.dom.nameInput, 'input', () => this.validateNameInput());
-        this.safeOn(this.dom.nameInput, 'keypress', (e) => { if (e.key === 'Enter') this.handleNameConfirmation(); });
+            if (act[action]) act[action]();
+        }, { passive: true });
 
-        // نموذج البلاغ
-        this.safeOn(this.dom.reportProblemForm, 'submit', (e) => this.handleReportSubmitGuarded(e));
+        // ====== 2) إدخال الاسم + Enter (مع مراعاة IME) ======
+        if (this.dom.nameInput) {
+            on(this.dom.nameInput, 'input', () => this.validateNameInput?.());
+            let composing = false;
+            on(this.dom.nameInput, 'compositionstart', () => { composing = true; });
+            on(this.dom.nameInput, 'compositionend',   () => { composing = false; });
+            on(this.dom.nameInput, 'keydown', (e) => {
+                if (e.key === 'Enter' && !composing) this.handleNameConfirmation?.();
+            });
+        }
 
-        // شبكة الخيارات
+        // ====== 3) نموذج البلاغ (اختياري) ======
+        if (this.dom.reportProblemForm) {
+            on(this.dom.reportProblemForm, 'submit', (e) => this.handleReportSubmitGuarded?.(e));
+        }
+
+        // ====== 4) شبكة الخيارات ======
         if (this.dom.optionsGrid) {
-            this.safeOn(this.dom.optionsGrid, 'click', (e) => {
+            on(this.dom.optionsGrid, 'click', (e) => {
                 const btn = e.target.closest('.option-btn');
-                if (!btn) return;
-                this.getAllEl('.option-btn').forEach(b => b.classList.add('disabled'));
-                this.checkAnswer(btn);
+                if (!btn || btn.classList.contains('disabled')) return;
+                // قفل مؤقت لمنع الاختيارات المتعددة
+                all('.option-btn', this.dom.optionsGrid).forEach((b) => b.classList.add('disabled'));
+                this.checkAnswer?.(btn);
             });
         } else {
             console.warn('[UI] .options-grid غير موجودة وقت الربط — سيتم تعبئتها لاحقًا عند عرض الأسئلة.');
         }
 
-        // المساعدات
-        const helpersEl = this.getEl('.helpers');
+        // ====== 5) أزرار المساعدات ======
+        const helpersEl = $('.helpers');
         if (helpersEl) {
-            this.safeOn(helpersEl, 'click', (e) => {
+            on(helpersEl, 'click', (e) => {
                 const btn = e.target.closest('.helper-btn');
-                if (btn) this.useHelper(btn);
+                if (!btn || btn.disabled) return;
+                this.useHelper?.(btn);
             });
         } else {
             console.warn('[UI] .helpers غير موجودة — تأكد من وجودها في شاشة اللعبة.');
         }
 
-        // شبكة الصور الرمزية
-        const avatarGrid = this.getEl('.avatar-grid');
+        // ====== 6) شبكة الصور الرمزية ======
+        const avatarGrid = $('.avatar-grid');
         if (avatarGrid) {
-            this.safeOn(avatarGrid, 'click', (e) => {
-                if (e.target.matches('.avatar-option')) this.selectAvatar(e.target);
+            on(avatarGrid, 'click', (e) => {
+                const opt = e.target.closest('.avatar-option, .avatar-upload-btn');
+                if (!opt) return;
+                this.selectAvatar?.(opt);
             });
         }
 
-        // زر عائم للبلاغ
+        // ====== 7) زر العائم للبلاغ (إن وُجد) ======
         if (this.dom.reportFab) {
-            this.safeOn(this.dom.reportFab, 'click', () => this.showModal('advancedReport'));
+            on(this.dom.reportFab, 'click', () => this.showModal?.('advancedReport'));
         }
 
-        // إغلاق المودالات عند الضغط على الخلفية
-        this.getAllEl('.modal').forEach(modal => {
-            this.safeOn(modal, 'click', (e) => {
-                if (e.target.classList.contains('modal')) {
-                    const modalId = modal.id;
-                    if (modalId === 'avatarEditorModal') this.cleanupAvatarEditor();
-                    modal.classList.remove('active');
-                }
+        // ====== 8) إغلاق المودالات بالضغط على الخلفية ======
+        all('.modal').forEach((modal) => {
+            on(modal, 'click', (e) => {
+                if (e.target !== modal) return;
+                const id = modal.id;
+                if (id === 'avatarEditorModal') this.cleanupAvatarEditor?.();
+                modal.classList.remove('active');
             });
         });
 
-        // رفع صورة البلاغ
-        if (this.dom.problemScreenshot) {
-            this.safeOn(this.dom.problemScreenshot, 'change', (e) => {
-                const file = e.target.files?.[0];
-                const prev = this.dom.reportImagePreview;
-                if (!prev) return;
-                if (!file) {
-                    prev.style.display = 'none';
-                    const img = prev.querySelector('img'); if (img) img.src = '';
-                    return;
-                }
-                const url = URL.createObjectURL(file);
-                prev.style.display = 'block';
-                const img = prev.querySelector('img'); if (img) img.src = url;
-                this.cleanupQueue.push({ type: 'url', value: url });
+        // ====== 9) زر تبديل الثيم (تحديث الأيقونة فورًا) ======
+        const themeBtn = $('.theme-toggle-btn');
+        if (themeBtn) {
+            on(themeBtn, 'click', () => {
+                const t = (document.body.dataset.theme || 'dark').toLowerCase() === 'dark' ? 'light' : 'dark';
+                window.UI?.theme?.set?.(t);
             });
         }
 
-        // ESC لإغلاق المودالات
-        this.safeOn(document, 'keydown', (e) => {
-            if (e.key === 'Escape') {
-                const open = document.querySelector('.modal.active');
-                if (open) {
-                    const modalId = open.id;
-                    if (modalId === 'avatarEditorModal') this.cleanupAvatarEditor();
-                    open.classList.remove('active');
+        // ====== 10) زر الروبوت (إرشادات) إن وُجد ======
+        const robotFab = $('#robotHelpFab');
+        if (robotFab) {
+            on(robotFab, 'click', () => {
+                // إن كان لديك AssistCards dialog
+                if (window.AssistCards?.open) {
+                    window.AssistCards.open();
+                } else {
+                    // أو انزلاق drawer المساعد
+                    const drawer = $('#helpDrawer');
+                    const backdrop = $('#helpBackdrop');
+                    if (drawer && backdrop) {
+                        backdrop.hidden = false;
+                        drawer.classList.add('open');
+                        const close = () => {
+                            drawer.classList.remove('open');
+                            backdrop.hidden = true;
+                        };
+                        on(backdrop, 'click', close, { once: true });
+                        const btnClose = drawer.querySelector('[data-help="close"]');
+                        if (btnClose) on(btnClose, 'click', close, { once: true });
+                    }
                 }
+            });
+        }
+
+        // ====== 11) تحسينات لوحة الصدارة (اختياري) ======
+        if (this.dom.lbMode) {
+            on(this.dom.lbMode, 'change', () => this.displayLeaderboard?.());
+        }
+        if (this.dom.lbAttempt) {
+            on(this.dom.lbAttempt, 'change', () => this.displayLeaderboard?.());
+        }
+
+        // ====== 12) حماية إضافية: تعطيل DoubleTap Zoom على الأزرار (iOS) ======
+        on(document, 'touchend', (e) => {
+            const t = e.target.closest('button, .option-btn, .helper-btn, [data-action]');
+            if (!t) return;
+            const now = performance.now();
+            this._lastTouchEnd = this._lastTouchEnd || 0;
+            if (now - this._lastTouchEnd < 350) e.preventDefault();
+            this._lastTouchEnd = now;
+        }, { passive: false });
+
+        // تقرير خفيف في التطوير
+        if ((this?.config?.DEBUG === true)) {
+            console.debug('[bindEventListeners] تم ربط المستمعات الأساسية بنجاح ✅');
+        }
+    }
+
+    // رفع صورة البلاغ (مع فحص النوع/الحجم + تنظيف روابط المعاينة + سحب/إفلات)
+    if (this.dom.problemScreenshot) {
+        const input  = this.dom.problemScreenshot;
+        const prev   = this.dom.reportImagePreview;
+        const MAX_MB = 6; // حد أقصى افتراضي 6MB
+        const accept = /^image\/(png|jpe?g|webp|gif|bmp|svg\+xml)$/i;
+
+        const revokeURL = (url) => {
+            try { URL.revokeObjectURL(url); } catch {}
+        };
+
+        const showPreview = async (file) => {
+            if (!prev) return;
+
+            // فحص النوع والحجم
+            if (!accept.test(file.type || '')) {
+                this.showToast?.('⚠️ الصيغة غير مدعومة. الرجاء رفع صورة (PNG/JPG/WEBP...)', 'error');
+                return;
+            }
+            if (file.size > MAX_MB * 1024 * 1024) {
+                this.showToast?.(`⚠️ الحجم كبير (${(file.size/1048576).toFixed(1)}MB). الحد ${MAX_MB}MB.`, 'error');
+                return;
+            }
+
+            // تنظيف رابط سابق إن وجد
+            const oldImg = prev.querySelector('img');
+            if (oldImg?.dataset?.blobUrl) revokeURL(oldImg.dataset.blobUrl);
+
+            // إنشاء/تحديث عنصر الصورة
+            let img = oldImg;
+            if (!img) {
+                img = document.createElement('img');
+                img.alt = 'معاينة الصورة المرفوعة';
+                img.decoding = 'async';
+                img.loading = 'lazy';
+                prev.innerHTML = '';
+                prev.appendChild(img);
+            }
+
+            // إنشاء Blob URL وعرضه
+            const blobUrl = URL.createObjectURL(file);
+            img.dataset.blobUrl = blobUrl;
+            img.src = blobUrl;
+
+            // إتاحة الإخفاء/الإظهار
+            prev.style.display = 'block';
+
+            // إضافة إلى طابور التنظيف العام
+            this.cleanupQueue?.push?.({ type: 'url', value: blobUrl });
+
+            // محاولة decoding هادئة لتحسين الانسيابية
+            try { await img.decode?.(); } catch {}
+        };
+
+        // التغيير عبر أداة اختيار الملفات
+        this.safeOn(input, 'change', (e) => {
+            const file = e.target?.files?.[0];
+            if (!file) {
+                if (prev) {
+                    const img = prev.querySelector('img');
+                    if (img?.dataset?.blobUrl) revokeURL(img.dataset.blobUrl);
+                    prev.style.display = 'none';
+                    if (img) img.removeAttribute('src');
+                }
+                return;
+            }
+            showPreview(file);
+        });
+
+        // دعم السحب والإفلات على منطقة المعاينة (إن وُجدت)
+        if (prev) {
+            const stop = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+            ['dragenter','dragover','dragleave','drop'].forEach((ev) => {
+                this.safeOn(prev, ev, stop, { passive: false });
+            });
+            this.safeOn(prev, 'dragover', () => prev.classList.add('is-dragover'));
+            this.safeOn(prev, 'dragleave', () => prev.classList.remove('is-dragover'));
+            this.safeOn(prev, 'drop', (ev) => {
+                prev.classList.remove('is-dragover');
+                const file = ev.dataTransfer?.files?.[0];
+                if (file) {
+                    // عكس القيمة على input للحفاظ على الاتساق إن احتجته لاحقًا
+                    const dt = new DataTransfer();
+                    dt.items.add(file);
+                    input.files = dt.files;
+                    showPreview(file);
+                }
+            });
+        }
+    }
+
+    // ESC لإغلاق الواجهات المفتوحة (مودالات/حوار/درور)
+    this.safeOn(document, 'keydown', (e) => {
+        if (e.key !== 'Escape') return;
+
+        // تجاهل لو كان التركيز داخل عنصر إدخال وتوجد قائمة اقتراحات/IMEs
+        const active = document.activeElement;
+        const isTyping =
+            active &&
+            (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+        if (isTyping && (active.dataset?.escLock === 'true')) return;
+
+        // 1) إغلاق آخر <dialog open> إن وجد
+        const openDialogs = Array.from(document.querySelectorAll('dialog[open]'));
+        if (openDialogs.length) {
+            const top = openDialogs.at(-1);
+            try { top.close(); } catch { top.removeAttribute('open'); }
+            return;
+        }
+
+        // 2) إغلاق أي .modal.active (نأخذ الأخيرة للاقتراب من الأعلى)
+        const openModals = Array.from(document.querySelectorAll('.modal.active'));
+        if (openModals.length) {
+            const top = openModals.at(-1);
+            const id  = top.id;
+            if (id === 'avatarEditorModal') this.cleanupAvatarEditor?.();
+            top.classList.remove('active');
+            return;
+        }
+
+        // 3) إغلاق درج المساعدة إن كان مفتوحًا
+        const drawer   = document.getElementById('helpDrawer');
+        const backdrop = document.getElementById('helpBackdrop');
+        if (drawer?.classList?.contains('open')) {
+            drawer.classList.remove('open');
+            if (backdrop) backdrop.hidden = true;
+            return;
+        }
+    });
+
+    // فلاتر لوحة الصدارة + اتصال الشبكة (محسّنة مع تخزين محلي و debounce)
+    bindLeaderboardFiltersAndConnectivity() {
+        const LS_MODE_KEY = 'lb_mode';
+        const LS_ATTEMPT_KEY = 'lb_attempt';
+        const DEBOUNCE_MS = 150;
+
+        // Debounce محلي لمنع تكرار التحديثات السريعة
+        const debouncedShow = () => {
+            clearTimeout(this._lbDebTimer);
+            this._lbDebTimer = setTimeout(() => this.displayLeaderboard?.(), DEBOUNCE_MS);
+        };
+
+        // ====== فلاتر لوحة الصدارة ======
+        if (this.dom?.lbMode) {
+            // استرجاع الوضع السابق إن وُجد وكان خياراً صالحاً
+            try {
+                const savedMode = localStorage.getItem(LS_MODE_KEY);
+                if (savedMode && this.dom.lbMode.querySelector(`option[value="${savedMode}"]`)) {
+                    this.dom.lbMode.value = savedMode;
+                }
+            } catch {}
+
+            // تمكين/تعطيل قائمة المحاولة وفق الوضع الحالي
+            if (this.dom?.lbAttempt) {
+                this.dom.lbAttempt.disabled = (this.dom.lbMode.value !== 'attempt');
+            }
+
+            // عند التغيير: احفظ + فعّل/عطّل + حدّث اللوحة (debounced)
+            this.safeOn(this.dom.lbMode, 'change', () => {
+                const mode = this.dom.lbMode.value;
+                try { localStorage.setItem(LS_MODE_KEY, mode); } catch {}
+                if (this.dom?.lbAttempt) {
+                    this.dom.lbAttempt.disabled = (mode !== 'attempt');
+                }
+                // في حال احتجت لملء قائمة المحاولة عند التحويل إلى attempt
+                if (mode === 'attempt' && this.dom?.lbAttempt && !this.dom.lbAttempt.options?.length) {
+                    // إن كانت لديك دالة تعبئة، استدعها، وإلا اترك displayLeaderboard تتكفل
+                    this.populateAttemptSelect?.().finally?.(debouncedShow) ?? debouncedShow();
+                } else {
+                    debouncedShow();
+                }
+            });
+        }
+
+        if (this.dom?.lbAttempt) {
+            // استرجاع رقم المحاولة السابق إن وُجد
+            try {
+                const savedAttempt = localStorage.getItem(LS_ATTEMPT_KEY);
+                if (savedAttempt && !Number.isNaN(Number(savedAttempt))) {
+                    this.dom.lbAttempt.value = String(savedAttempt);
+                }
+            } catch {}
+
+            // عند التغيير: احفظ + حدّث اللوحة (debounced)
+            this.safeOn(this.dom.lbAttempt, 'change', () => {
+                const v = this.dom.lbAttempt.value;
+                try { localStorage.setItem(LS_ATTEMPT_KEY, v); } catch {}
+                debouncedShow();
+            });
+        }
+
+        // استدعاء أولي لعرض اللوحة حسب الحالة المُسترجعة
+        this.displayLeaderboard?.();
+
+        // ====== أحداث الاتصال بالشبكة ======
+        this.safeOn(window, 'online', () => {
+            // إن كانت لديك دوال خاصة فاستدعِها، وإلا طبّق سلوكاً افتراضياً لطيفاً
+            if (typeof this.handleOnlineStatus === 'function') {
+                this.handleOnlineStatus();
+            } else {
+                document.body.classList.remove('is-offline');
+                this.showToast?.('✅ تمت استعادة الاتصال بالإنترنت', 'success');
+                // تحديث سريع للوحة عند عودة الاتصال
+                debouncedShow();
             }
         });
 
-        // فلاتر لوحة الصدارة
-        if (this.dom.lbMode) {
-            this.safeOn(this.dom.lbMode, 'change', () => {
-                const m = this.dom.lbMode.value;
-                if (this.dom.lbAttempt) this.dom.lbAttempt.disabled = (m !== 'attempt');
-                this.displayLeaderboard();
-            });
-        }
-        if (this.dom.lbAttempt) {
-            this.safeOn(this.dom.lbAttempt, 'change', () => this.displayLeaderboard());
-        }
-
-        // أحداث الاتصال
-        this.safeOn(window, 'online',  () => this.handleOnlineStatus());
-        this.safeOn(window, 'offline', () => this.handleOfflineStatus());
+        this.safeOn(window, 'offline', () => {
+            if (typeof this.handleOfflineStatus === 'function') {
+                this.handleOfflineStatus();
+            } else {
+                document.body.classList.add('is-offline');
+                this.showToast?.('⚠️ أنت غير متصل الآن — ستتم مزامنة النتائج عند عودة الإنترنت', 'info');
+            }
+        });
 
         // تشخيص سريع: عرض العناصر المفقودة الهامة
         this._diagnoseMissingCoreEls?.();
     }
 
+    /**
+     * إنشاء تجمع صوتي (Audio Pool) لإعادة استخدام كائنات الصوت بدل إنشائها كل مرة.
+     * هذا يحسن الأداء ويمنع تأخير التشغيل عند تكرار المؤثرات السريعة.
+     * @param {string} src - مسار ملف الصوت (mp3/ogg/webm).
+     * @param {number} [size=6] - عدد النسخ المُسبقة التحميل.
+     * @returns {{list: HTMLAudioElement[], idx: number, src: string, ready: boolean}}
+     */
     _createAudioPool(src, size = 6) {
+        if (!src || typeof src !== 'string') {
+            console.warn('[AudioPool] مسار الصوت غير صالح:', src);
+            return { list: [], idx: 0, src: '', ready: false };
+        }
+
         const list = [];
-        for (let i = 0; i < size; i++) {
+        const max = Math.max(1, Math.min(size, 12)); // حدود منطقية
+        let loadedCount = 0;
+
+        for (let i = 0; i < max; i++) {
             const a = new Audio();
             a.preload = 'auto';
             a.src = src;
+            a.dataset.index = i;
+            a.load();
+
+            // مستمعات للتحقق من جاهزية التحميل
+            a.addEventListener('canplaythrough', () => {
+                loadedCount++;
+                if (loadedCount >= max) pool.ready = true;
+            }, { once: true });
+
+            a.addEventListener('error', (err) => {
+                console.warn(`[AudioPool] فشل تحميل الصوت (${i}):`, err?.message || err);
+            });
+
             list.push(a);
         }
-        return { list, idx: 0 };
+
+        const pool = { list, idx: 0, src, ready: false };
+        console.debug(`[AudioPool] تم إنشاء ${max} نسخة من الصوت: ${src}`);
+        return pool;
     }
 
-
+    /**
+     * تشغيل صوت من التجمع بالتتابع (Round-Robin) لتفادي تعارض الأصوات.
+     * @param {{list: HTMLAudioElement[], idx: number}} pool - تجمع الصوت المُنشأ مسبقاً.
+     * @param {number} [volume=0.7] - مستوى الصوت بين 0 و 1.
+     */
     _playFromPool(pool, volume = 0.7) {
-        if (!pool || !pool.list?.length) return;
-        const a = pool.list[pool.idx];
+        if (!pool || !Array.isArray(pool.list) || pool.list.length === 0) {
+            console.warn('[AudioPool] محاولة تشغيل صوت من تجمع فارغ');
+            return;
+        }
+
+        // دورة آمنة على الصوت التالي
+        const audio = pool.list[pool.idx];
         pool.idx = (pool.idx + 1) % pool.list.length;
+
         try {
-            a.currentTime = 0;
-            a.volume = volume;
-            a.play().catch(() => {});
-        } catch (_) {}
+            if (!audio) return;
+
+            // إعادة التشغيل من البداية
+            audio.currentTime = 0;
+            audio.volume = Math.min(Math.max(volume, 0), 1);
+
+            // تشغيل مع حماية من سياسات المتصفح (Autoplay)
+            const playPromise = audio.play();
+            if (playPromise instanceof Promise) {
+                playPromise.catch((err) => {
+                    // تجاهل "NotAllowedError" (بدون تفاعل المستخدم)
+                    if (!String(err).includes('NotAllowedError')) {
+                        console.warn('[AudioPool] فشل تشغيل الصوت:', err);
+                    }
+                });
+            }
+        } catch (err) {
+            console.error('[AudioPool] خطأ أثناء تشغيل الصوت:', err);
+        }
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+    
+        
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     _unlockAudioOnce = () => {
