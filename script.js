@@ -2639,7 +2639,6 @@ document.addEventListener('DOMContentLoaded', () => {
     btnPrev?.addEventListener('click',()=>{if(i>0){i--;render()}});    
     btnNext?.addEventListener('click',()=>{if(i<cards.length-1){i++;render()}});    
     render();    
-    })();٧    
+    })();    
 });    
-    
     
