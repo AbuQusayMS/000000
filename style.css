@@ -704,6 +704,55 @@
     .help-card a{ font-weight:700; text-decoration:none }
     .help-card a:hover{ text-decoration:underline }
 
+    .multi-fab {
+        position: fixed;
+        right: clamp(12px, 2.8vw, 20px);
+        bottom: clamp(12px, 2.8vw, 20px);
+        z-index: 1000;
+        display: grid;
+        gap: .5rem;
+        justify-items: end;
+    }
+    .multi-fab .fab {
+        border: none;
+        border-radius: 999px;
+        padding: .7rem .9rem;
+        font: 700 16px/1 system-ui, sans-serif;
+        box-shadow: 0 6px 20px rgba(0,0,0,.25);
+        background: var(--accent, #3b82f6);
+        color: #fff;
+        cursor: pointer;
+        transition: transform .15s ease, opacity .15s ease;
+    }
+    .multi-fab .fab.main { background: var(--accent, #3b82f6); }
+    .multi-fab .fab:hover { transform: translateY(-1px) scale(1.02); }
+    .multi-fab .fab:active { transform: scale(.98); }
+
+    .multi-fab .fab-menu {
+        display: grid;
+        gap: .4rem;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(.2rem);
+        transition: opacity .15s ease, transform .15s ease;
+    }
+    .multi-fab.open .fab-menu {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateY(0);
+    }
+    .multi-fab .fab.item {
+        background: var(--surface-3, #334155);
+        color: #fff;
+        font-size: 18px;
+        padding: .6rem .7rem;
+    }
+
+    @media (max-width: 420px) {
+        .multi-fab .fab { padding: .55rem .75rem; }
+        .multi-fab .fab.item { font-size: 17px; }
+    }
+
     /* Assist dialog */
     :root {
         --assist-gap: .75rem;
