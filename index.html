@@ -316,5 +316,59 @@
           <button type="button" class="fab item" data-action="open-report" role="menuitem" title="إبلاغ عن مشكلة">⚠️</button>
       </div>
   </div>
+
+  <script>
+      // Multi-FAB behavior (Help + Report)
+      (function () {
+          const $ = (s, r = document) => r.querySelector(s);
+          const multi   = $('#multiFab');
+          const mainBtn = $('#multiFabMain');
+          const menu    = $('#multiFabMenu');
+
+          if (!multi || !mainBtn || !menu) return;
+
+          function open()  { multi.classList.add('open');  mainBtn.setAttribute('aria-expanded', 'true');  menu.setAttribute('aria-hidden', 'false'); }
+          function close() { multi.classList.remove('open');mainBtn.setAttribute('aria-expanded', 'false'); menu.setAttribute('aria-hidden', 'true'); }
+          function toggle(){ multi.classList.contains('open') ? close() : open(); }
+
+          mainBtn.addEventListener('click', toggle);
+
+          // Click outside to close
+          document.addEventListener('click', (e) => {
+              if (!multi.contains(e.target)) close();
+          });
+
+          // Menu actions
+          menu.addEventListener('click', (e) => {
+              const btn = e.target.closest('.fab.item');
+              if (!btn) return;
+              const act = btn.dataset.action;
+              if (act === 'open-help') {
+                  close();
+                  // يفتح نافذة الإرشادات (تعتمد على AssistCards التي أضفناها سابقاً)
+                  if (window.AssistCards?.open) window.AssistCards.open();
+                  else document.getElementById('robotHelpFab')?.click();
+              } else if (act === 'open-report') {
+                  close();
+                  // يفتح نافذة البلاغ الموجودة لديك مسبقًا
+                  // يعتمد على وجود modal بـ id="advancedReportModal"
+                  const m = document.getElementById('advancedReportModal');
+                  if (m) m.classList.add('active');
+                  // أو لو عندك دالة تحكم عامة:
+                  // if (window.quiz?.showModal) window.quiz.showModal('advancedReport');
+              }
+          });
+
+          // اختصار لوحة مفاتيح للإبلاغ بسرعة: Alt+R
+          document.addEventListener('keydown', (e) => {
+              if (e.altKey && (e.key.toLowerCase() === 'r')) {
+                  e.preventDefault();
+                  // افتح مباشرة نافذة البلاغ
+                  const m = document.getElementById('advancedReportModal');
+                  if (m) m.classList.add('active');
+              }
+          });
+      })();
+  </script>
 </body>
 </html>
